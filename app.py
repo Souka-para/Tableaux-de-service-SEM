@@ -1429,7 +1429,7 @@ elif page == "Administration" and is_admin:
 
 st.divider()
 st.caption(
-    "Prototype de démarrage – Planning des vacations SEM / DRMCO."
+    "Planning des vacations SEM / DRMCO."
 )
 
 
