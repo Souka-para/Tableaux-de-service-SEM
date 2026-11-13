@@ -923,11 +923,6 @@ if st.session_state.user is None:
         else:
             st.error("Identifiant ou mot de passe incorrect.")
 
-    st.info(
-        "Première connexion : identifiant `soukaina`, "
-        "mot de passe `ChangeMe123!`. "
-        "Changez immédiatement ce mot de passe depuis « Mon compte »."
-    )
     st.stop()
 
 
