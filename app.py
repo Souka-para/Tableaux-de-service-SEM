@@ -45,7 +45,6 @@ DAYS = [
 
 REGULAR_ROLES = ["Chef de service", "Contrôleur"]
 
-
 # ------------------------------------------------------------
 # Database
 # ------------------------------------------------------------
@@ -696,7 +695,7 @@ def creer_planning_final_pdf(date_debut, date_fin, users, vacations):
     )
 
     elements = [
-        Paragraph("TABLEAU DE SERVICE – PLANNING FINAL", style_titre),
+        Paragraph("TABLEAU DE SERVICE – PLANNING FINAL<br/>SEM – DRMCO", style_titre),
         Paragraph(
             f"<b>Période :</b> {date_debut.strftime('%d/%m/%Y')} "
             f"au {date_fin.strftime('%d/%m/%Y')} "
