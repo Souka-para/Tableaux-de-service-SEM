@@ -883,7 +883,6 @@ st.markdown("""
 st.title("📅 Planning des vacations")
 st.caption("Service Exploitation Météorologique – DRMCO")
 
-
 # ------------------------------------------------------------
 # Login
 # ------------------------------------------------------------
