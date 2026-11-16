@@ -1013,7 +1013,7 @@ if page == "Planning des 5 semaines":
                     f"{day_name} "
                     f"{current_day.strftime('%d/%m')}"
                 ),
-                "Boughanem Soukaina": (
+                "Chef du service": (
                     next(
                         (
                             u["full_name"]
