@@ -111,7 +111,6 @@ def init_db():
             )
         """)
 
-        # Nouvelle table indépendante pour les congés
         conn.execute("""
             CREATE TABLE IF NOT EXISTS leaves (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -257,7 +256,6 @@ def save_vacation(user_id, vacation_date, note=""):
             vacation_date.isoformat()
         )).fetchone()
 
-        # Un utilisateur en congé ne peut pas prendre une vacation
         leave = conn.execute("""
             SELECT id FROM leaves
             WHERE user_id=?
@@ -337,7 +335,6 @@ def save_leave(user_id, start_date, end_date, reason, note=""):
 
     with db() as conn:
 
-        # Éviter les déclarations qui se chevauchent
         overlap = conn.execute("""
             SELECT id FROM leaves
             WHERE user_id=?
@@ -395,8 +392,14 @@ def get_my_leaves(user_id):
         """, (user_id,)).fetchall()
 
 
-def update_leave(leave_id, user_id, start_date,
-                 end_date, reason, note):
+def update_leave(
+    leave_id,
+    user_id,
+    start_date,
+    end_date,
+    reason,
+    note
+):
 
     if end_date < start_date:
         return False, "Période incorrecte."
@@ -805,6 +808,7 @@ def creer_modele_pdf(date_debut=None, date_fin=None):
 
 # ============================================================
 # EXPORT PDF - PLANNING FINAL AVEC CONGES
+# OBSERVATIONS REGROUPEES PAR COMMENTAIRE
 # ============================================================
 
 def creer_planning_final_pdf(
@@ -882,7 +886,7 @@ def creer_planning_final_pdf(
         fontName="Helvetica",
         fontSize=7,
         alignment=TA_LEFT,
-        leading=8
+        leading=9
     )
 
     elements = [
@@ -914,25 +918,33 @@ def creer_planning_final_pdf(
             )
         )
 
-    entetes.append(Paragraph("OBSERVATIONS", style_entete))
+    entetes.append(
+        Paragraph("OBSERVATIONS", style_entete)
+    )
 
     donnees = [entetes]
 
     for user in equipe:
 
         nom = escape(str(user["full_name"] or ""))
-        role = escape(str(user["role"] or ""))
+        role = str(user["role"] or "")
 
         ligne = [
             Paragraph(nom, style_cellule),
             Paragraph("", style_cellule),
-            Paragraph(role, style_cellule)
+            Paragraph(escape(role), style_cellule)
         ]
 
-        observations = []
+        user_vacations = vacations_par_user.get(
+            user["id"], {}
+        )
 
-        user_vacations = vacations_par_user.get(user["id"], {})
-        user_leaves = leaves_par_user.get(user["id"], [])
+        user_leaves = leaves_par_user.get(
+            user["id"], []
+        )
+
+        # Regroupement des jours par commentaire
+        observations_par_commentaire = {}
 
         for d in dates:
 
@@ -950,17 +962,22 @@ def creer_planning_final_pdf(
 
                 contenu = "CONGÉ"
 
-                # Ajouter le motif et l'observation dans la colonne dédiée
-                observation = (
-                    f"{d.strftime('%d/%m')}: "
-                    f"{leave_for_day['reason']}"
-                )
+                reason = (
+                    leave_for_day["reason"] or "Congé"
+                ).strip()
 
-                if leave_for_day["note"]:
-                    observation += f" - {leave_for_day['note']}"
+                note = (
+                    leave_for_day["note"] or ""
+                ).strip()
 
-                if observation not in observations:
-                    observations.append(observation)
+                commentaire = reason
+
+                if note:
+                    commentaire += " - " + note
+
+                observations_par_commentaire.setdefault(
+                    commentaire, []
+                ).append(d)
 
             elif role in REGULAR_ROLES:
 
@@ -975,22 +992,54 @@ def creer_planning_final_pdf(
                 ).strip()
 
                 if note:
-                    observations.append(
-                        f"{d.strftime('%d/%m')}: {note}"
-                    )
+
+                    observations_par_commentaire.setdefault(
+                        note, []
+                    ).append(d)
 
             else:
+
                 contenu = ""
 
             ligne.append(
-                Paragraph(contenu, style_cellule)
+                Paragraph(escape(contenu), style_cellule)
             )
 
-        obs = "<br/>".join(
-            escape(x) for x in observations
-        ) or " "
+        # Construction du résumé dans OBSERVATIONS
+        lignes_observations = []
 
-        ligne.append(Paragraph(obs, style_obs))
+        for commentaire, jours in observations_par_commentaire.items():
+
+            nombre_jours = len(jours)
+
+            libelle_jour = (
+                "jour" if nombre_jours == 1 else "jours"
+            )
+
+            dates_formatees = ", ".join(
+                jour.strftime("%d/%m")
+                for jour in jours
+            )
+
+            ligne_observation = (
+                f"<b>{escape(commentaire)}</b> : "
+                f"{nombre_jours} {libelle_jour} "
+                f"({dates_formatees})"
+            )
+
+            lignes_observations.append(
+                ligne_observation
+            )
+
+        obs = (
+            "<br/>".join(lignes_observations)
+            if lignes_observations
+            else " "
+        )
+
+        ligne.append(
+            Paragraph(obs, style_obs)
+        )
 
         donnees.append(ligne)
 
@@ -1002,7 +1051,7 @@ def creer_planning_final_pdf(
     largeur_nom = 105
     largeur_grade = 35
     largeur_fonction = 65
-    largeur_obs = 125
+    largeur_obs = 145
 
     largeur_jour = (
         largeur_page
@@ -1032,8 +1081,8 @@ def creer_planning_final_pdf(
         ("BACKGROUND", (-1, 0), (-1, 0), colors.lightgrey),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 2),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
         ("TOPPADDING", (0, 0), (-1, -1), 2),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 2)
     ]))
@@ -1288,7 +1337,6 @@ if page == "Planning des 5 semaines":
                 "—"
             )
 
-            # Afficher les congés des agents concernés
             if chef != "—" and chef in leaves_names:
                 chef_display = f"{chef} (CONGÉ)"
             else:
