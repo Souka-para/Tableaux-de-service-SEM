@@ -883,9 +883,10 @@ def creer_planning_final_pdf(
 
     style_obs = ParagraphStyle(
         "ObsFinal",
-        fontName="Helvetica",
+        fontName="Helvetica-Bold",
         fontSize=7,
-        alignment=TA_LEFT,
+        textColor=colors.red,
+        alignment=4,
         leading=9
     )
 
