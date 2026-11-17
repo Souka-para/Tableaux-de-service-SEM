@@ -45,8 +45,9 @@ REGULAR_ROLES = ["Chef de service", "Contrôleur"]
 
 LEAVE_REASONS = [
     "Congé annuel",
-    "Autorisation d'absence",
+    "Congé maladie",
     "Mission",
+    "Autorisation d'absence",
     "Récupération",
     "Autre"
 ]
