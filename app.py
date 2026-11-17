@@ -808,7 +808,7 @@ def creer_modele_pdf(date_debut=None, date_fin=None):
 
 # ============================================================
 # EXPORT PDF - PLANNING FINAL AVEC CONGES
-# OBSERVATIONS REGROUPEES PAR COMMENTAIRE
+# OBSERVATIONS : PERIODES DU ... AU ...
 # ============================================================
 
 def creer_planning_final_pdf(
@@ -943,8 +943,9 @@ def creer_planning_final_pdf(
             user["id"], []
         )
 
-        # Regroupement des jours par commentaire
-        observations_par_commentaire = {}
+        # ----------------------------------------------------
+        # REMPLISSAGE DES JOURS
+        # ----------------------------------------------------
 
         for d in dates:
 
@@ -962,23 +963,6 @@ def creer_planning_final_pdf(
 
                 contenu = "CONGÉ"
 
-                reason = (
-                    leave_for_day["reason"] or "Congé"
-                ).strip()
-
-                note = (
-                    leave_for_day["note"] or ""
-                ).strip()
-
-                commentaire = reason
-
-                if note:
-                    commentaire += " - " + note
-
-                observations_par_commentaire.setdefault(
-                    commentaire, []
-                ).append(d)
-
             elif role in REGULAR_ROLES:
 
                 contenu = "Régulier" if d.weekday() < 5 else ""
@@ -986,16 +970,6 @@ def creer_planning_final_pdf(
             elif key in user_vacations:
 
                 contenu = "Matin"
-
-                note = (
-                    user_vacations[key]["note"] or ""
-                ).strip()
-
-                if note:
-
-                    observations_par_commentaire.setdefault(
-                        note, []
-                    ).append(d)
 
             else:
 
@@ -1005,31 +979,62 @@ def creer_planning_final_pdf(
                 Paragraph(escape(contenu), style_cellule)
             )
 
-        # Construction du résumé dans OBSERVATIONS
+        # ----------------------------------------------------
+        # OBSERVATIONS : CONGES DU ... AU ...
+        # ----------------------------------------------------
+
         lignes_observations = []
 
-        for commentaire, jours in observations_par_commentaire.items():
+        for leave in user_leaves:
 
-            nombre_jours = len(jours)
+            debut = date.fromisoformat(leave["start_date"])
+            fin = date.fromisoformat(leave["end_date"])
 
-            libelle_jour = (
-                "jour" if nombre_jours == 1 else "jours"
-            )
+            # Limiter les dates à la période du planning exporté
+            debut_affiche = max(debut, date_debut)
+            fin_affiche = min(fin, date_fin)
 
-            dates_formatees = ", ".join(
-                jour.strftime("%d/%m")
-                for jour in jours
-            )
+            # Vérifier que le congé chevauche la période exportée
+            if debut_affiche <= fin_affiche:
 
-            ligne_observation = (
-                f"<b>{escape(commentaire)}</b> : "
-                f"{nombre_jours} {libelle_jour} "
-                f"({dates_formatees})"
-            )
+                motif = escape(
+                    str(leave["reason"] or "Congé").strip()
+                )
 
-            lignes_observations.append(
-                ligne_observation
-            )
+                observation = (
+                    f"<b>{motif}</b> : "
+                    f"du {debut_affiche.strftime('%d/%m/%Y')} "
+                    f"au {fin_affiche.strftime('%d/%m/%Y')}"
+                )
+
+                note = (leave["note"] or "").strip()
+
+                if note:
+                    observation += (
+                        f"<br/><i>{escape(note)}</i>"
+                    )
+
+                lignes_observations.append(observation)
+
+        # ----------------------------------------------------
+        # OBSERVATIONS DES VACATIONS
+        # ----------------------------------------------------
+
+        for vacation_date, vacation in user_vacations.items():
+
+            note = (vacation["note"] or "").strip()
+
+            if note:
+
+                jour = date.fromisoformat(vacation_date)
+
+                if date_debut <= jour <= date_fin:
+
+                    lignes_observations.append(
+                        f"<b>Vacation du "
+                        f"{jour.strftime('%d/%m/%Y')}</b> : "
+                        f"{escape(note)}"
+                    )
 
         obs = (
             "<br/>".join(lignes_observations)
