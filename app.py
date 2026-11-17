@@ -1,3 +1,4 @@
+
 import streamlit as st
 import sqlite3
 import hashlib
@@ -18,22 +19,19 @@ from reportlab.lib.pagesizes import A3, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.platypus import (
-    SimpleDocTemplate,
-    Table,
-    TableStyle,
-    Paragraph,
-    Spacer,
+    SimpleDocTemplate, Table, TableStyle,
+    Paragraph, Spacer
 )
 
 
-# ------------------------------------------------------------
-# Configuration
-# ------------------------------------------------------------
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 st.set_page_config(
     page_title="Planning des vacations – SEM / DRMCO",
     page_icon="📅",
-    layout="wide",
+    layout="wide"
 )
 
 DB_PATH = "planning_sem.db"
@@ -45,9 +43,18 @@ DAYS = [
 
 REGULAR_ROLES = ["Chef de service", "Contrôleur"]
 
-# ------------------------------------------------------------
-# Database
-# ------------------------------------------------------------
+LEAVE_REASONS = [
+    "Congé annuel",
+    "Autorisation d'absence",
+    "Mission",
+    "Récupération",
+    "Autre"
+]
+
+
+# ============================================================
+# DATABASE
+# ============================================================
 
 def db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -56,25 +63,29 @@ def db():
     return conn
 
 
-def hash_password(password: str, salt: bytes | None = None):
+def hash_password(password, salt=None):
     salt = salt or secrets.token_bytes(16)
+
     digest = hashlib.pbkdf2_hmac(
         "sha256",
         password.encode("utf-8"),
         salt,
         200_000
     )
+
     return salt.hex(), digest.hex()
 
 
-def verify_password(password: str, salt_hex: str, hash_hex: str):
+def verify_password(password, salt_hex, hash_hex):
     salt = bytes.fromhex(salt_hex)
     _, candidate = hash_password(password, salt)
     return hmac.compare_digest(candidate, hash_hex)
 
 
 def init_db():
+
     with db() as conn:
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,6 +110,20 @@ def init_db():
             )
         """)
 
+        # Nouvelle table indépendante pour les congés
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS leaves (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                note TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
@@ -107,96 +132,105 @@ def init_db():
         """)
 
         existing = conn.execute(
-            "SELECT id FROM users WHERE username = ?",
+            "SELECT id FROM users WHERE username=?",
             ("soukaina",)
         ).fetchone()
 
         if not existing:
+
             salt, pw_hash = hash_password("ChangeMe123!")
-            conn.execute(
-                """
+
+            conn.execute("""
                 INSERT INTO users
                 (username, full_name, role, salt, password_hash)
                 VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    "soukaina",
-                    "Boughanem Soukaina",
-                    "Chef de service",
-                    salt,
-                    pw_hash
-                ),
-            )
+            """, (
+                "soukaina",
+                "Boughanem Soukaina",
+                "Chef de service",
+                salt,
+                pw_hash
+            ))
 
 
 def get_user(username):
+
     with db() as conn:
-        return conn.execute(
-            """
-            SELECT * FROM users
+        return conn.execute("""
+            SELECT *
+            FROM users
             WHERE username=? AND active=1
-            """,
-            (username,)
-        ).fetchone()
+        """, (username,)).fetchone()
 
 
 def list_users():
+
     with db() as conn:
-        return conn.execute(
-            """
+        return conn.execute("""
             SELECT id, username, full_name, role, active
             FROM users
             ORDER BY id
-            """
-        ).fetchall()
+        """).fetchall()
 
 
 def create_user(username, full_name, role, password):
+
     salt, pw_hash = hash_password(password)
+
     with db() as conn:
-        conn.execute(
-            """
+        conn.execute("""
             INSERT INTO users
             (username, full_name, role, salt, password_hash)
             VALUES (?, ?, ?, ?, ?)
-            """,
-            (username.strip(), full_name.strip(), role, salt, pw_hash),
-        )
+        """, (
+            username.strip(),
+            full_name.strip(),
+            role,
+            salt,
+            pw_hash
+        ))
+
 
 def update_user_role(user_id, new_role):
+
     with db() as conn:
-        conn.execute(
-            "UPDATE users SET role=? WHERE id=?",
-            (new_role, user_id)
-        )
-        
+        conn.execute("""
+            UPDATE users
+            SET role=?
+            WHERE id=?
+        """, (new_role, user_id))
+
 
 def change_password(user_id, new_password):
+
     salt, pw_hash = hash_password(new_password)
+
     with db() as conn:
-        conn.execute(
-            """
+        conn.execute("""
             UPDATE users
             SET salt=?, password_hash=?
             WHERE id=?
-            """,
-            (salt, pw_hash, user_id),
-        )
+        """, (salt, pw_hash, user_id))
 
 
 def set_user_active(user_id, active):
-    """Active ou désactive un compte sans supprimer son historique."""
-    with db() as conn:
-        conn.execute(
-            "UPDATE users SET active=? WHERE id=?",
-            (1 if active else 0, user_id),
-        )
 
+    with db() as conn:
+        conn.execute("""
+            UPDATE users
+            SET active=?
+            WHERE id=?
+        """, (1 if active else 0, user_id))
+
+
+# ============================================================
+# VACATIONS
+# ============================================================
 
 def get_vacations(start_date, end_date):
+
     with db() as conn:
-        return conn.execute(
-            """
+        return conn.execute("""
             SELECT v.id, v.user_id, v.vacation_date,
                    v.note, v.updated_at,
                    u.full_name, u.role
@@ -204,113 +238,256 @@ def get_vacations(start_date, end_date):
             JOIN users u ON u.id=v.user_id
             WHERE v.vacation_date BETWEEN ? AND ?
             ORDER BY v.vacation_date, u.full_name
-            """,
-            (start_date.isoformat(), end_date.isoformat()),
-        ).fetchall()
+        """, (
+            start_date.isoformat(),
+            end_date.isoformat()
+        )).fetchall()
 
 
-def save_vacation(user_id, vacation_date, note):
+def save_vacation(user_id, vacation_date, note=""):
+
     with db() as conn:
-        existing = conn.execute(
-            """
+
+        existing = conn.execute("""
             SELECT id FROM vacations
             WHERE user_id=? AND vacation_date=?
-            """,
-            (user_id, vacation_date.isoformat()),
-        ).fetchone()
+        """, (
+            user_id,
+            vacation_date.isoformat()
+        )).fetchone()
 
-        count = conn.execute(
-            """
+        # Un utilisateur en congé ne peut pas prendre une vacation
+        leave = conn.execute("""
+            SELECT id FROM leaves
+            WHERE user_id=?
+            AND start_date<=?
+            AND end_date>=?
+        """, (
+            user_id,
+            vacation_date.isoformat(),
+            vacation_date.isoformat()
+        )).fetchone()
+
+        if leave:
+            return False, "Vous êtes déclaré en congé à cette date."
+
+        count = conn.execute("""
             SELECT COUNT(*) AS n
             FROM vacations
             WHERE vacation_date=?
-            """,
-            (vacation_date.isoformat(),),
-        ).fetchone()["n"]
+        """, (vacation_date.isoformat(),)).fetchone()["n"]
 
         if existing:
-            conn.execute(
-                """
+
+            conn.execute("""
                 UPDATE vacations
                 SET note=?, updated_at=?
                 WHERE user_id=? AND vacation_date=?
-                """,
-                (
-                    note,
-                    datetime.now().isoformat(timespec="seconds"),
-                    user_id,
-                    vacation_date.isoformat()
-                ),
-            )
+            """, (
+                note,
+                datetime.now().isoformat(timespec="seconds"),
+                user_id,
+                vacation_date.isoformat()
+            ))
+
             return True, "Vacation mise à jour."
 
         if count >= 2:
-            return False, (
-                "Les deux places de cette matinée sont déjà prises."
-            )
+            return False, "Les deux places de cette matinée sont déjà prises."
 
-        conn.execute(
-            """
+        conn.execute("""
             INSERT INTO vacations
             (user_id, vacation_date, note, updated_at)
             VALUES (?, ?, ?, ?)
-            """,
-            (
-                user_id,
-                vacation_date.isoformat(),
-                note,
-                datetime.now().isoformat(timespec="seconds")
-            ),
-        )
+        """, (
+            user_id,
+            vacation_date.isoformat(),
+            note,
+            datetime.now().isoformat(timespec="seconds")
+        ))
+
         return True, "Vacation enregistrée."
 
 
 def delete_vacation(vacation_id, user_id=None):
+
     with db() as conn:
+
         if user_id is None:
             conn.execute(
                 "DELETE FROM vacations WHERE id=?",
                 (vacation_id,)
             )
         else:
-            conn.execute(
-                """
+            conn.execute("""
                 DELETE FROM vacations
                 WHERE id=? AND user_id=?
-                """,
-                (vacation_id, user_id),
-            )
+            """, (vacation_id, user_id))
 
+
+# ============================================================
+# LEAVES - GESTION DES CONGES
+# ============================================================
+
+def save_leave(user_id, start_date, end_date, reason, note=""):
+
+    if end_date < start_date:
+        return False, "La date de fin doit être après la date de début."
+
+    with db() as conn:
+
+        # Éviter les déclarations qui se chevauchent
+        overlap = conn.execute("""
+            SELECT id FROM leaves
+            WHERE user_id=?
+            AND start_date<=?
+            AND end_date>=?
+        """, (
+            user_id,
+            end_date.isoformat(),
+            start_date.isoformat()
+        )).fetchone()
+
+        if overlap:
+            return False, "Une déclaration de congé existe déjà sur cette période."
+
+        conn.execute("""
+            INSERT INTO leaves
+            (user_id, start_date, end_date, reason, note, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            start_date.isoformat(),
+            end_date.isoformat(),
+            reason,
+            note.strip(),
+            datetime.now().isoformat(timespec="seconds")
+        ))
+
+    return True, "Congé enregistré avec succès."
+
+
+def get_leaves(start_date, end_date):
+
+    with db() as conn:
+        return conn.execute("""
+            SELECT l.*, u.full_name, u.role
+            FROM leaves l
+            JOIN users u ON u.id=l.user_id
+            WHERE l.start_date<=?
+            AND l.end_date>=?
+            ORDER BY l.start_date, u.full_name
+        """, (
+            end_date.isoformat(),
+            start_date.isoformat()
+        )).fetchall()
+
+
+def get_my_leaves(user_id):
+
+    with db() as conn:
+        return conn.execute("""
+            SELECT *
+            FROM leaves
+            WHERE user_id=?
+            ORDER BY start_date DESC
+        """, (user_id,)).fetchall()
+
+
+def update_leave(leave_id, user_id, start_date,
+                 end_date, reason, note):
+
+    if end_date < start_date:
+        return False, "Période incorrecte."
+
+    with db() as conn:
+
+        overlap = conn.execute("""
+            SELECT id FROM leaves
+            WHERE user_id=?
+            AND id<>?
+            AND start_date<=?
+            AND end_date>=?
+        """, (
+            user_id,
+            leave_id,
+            end_date.isoformat(),
+            start_date.isoformat()
+        )).fetchone()
+
+        if overlap:
+            return False, "Une autre déclaration existe sur cette période."
+
+        result = conn.execute("""
+            UPDATE leaves
+            SET start_date=?, end_date=?,
+                reason=?, note=?
+            WHERE id=? AND user_id=?
+        """, (
+            start_date.isoformat(),
+            end_date.isoformat(),
+            reason,
+            note.strip(),
+            leave_id,
+            user_id
+        ))
+
+        if result.rowcount == 0:
+            return False, "Déclaration introuvable."
+
+    return True, "Congé modifié avec succès."
+
+
+def delete_leave(leave_id, user_id=None):
+
+    with db() as conn:
+
+        if user_id is None:
+            conn.execute(
+                "DELETE FROM leaves WHERE id=?",
+                (leave_id,)
+            )
+        else:
+            conn.execute("""
+                DELETE FROM leaves
+                WHERE id=? AND user_id=?
+            """, (leave_id, user_id))
+
+
+# ============================================================
+# DATES
+# ============================================================
 
 def monday_of(d):
     return d - timedelta(days=d.weekday())
 
 
 def five_week_period():
+
     start = monday_of(date.today())
     end = start + timedelta(days=34)
+
     return start, end
 
 
-# ------------------------------------------------------------
-# Export Excel : modèle vierge personnalisé
-# Structure : Noms, Grade, Fonction, dates de la période,
-# puis Observations. 9 lignes vierges, sans numérotation.
-# ------------------------------------------------------------
+# ============================================================
+# EXPORT EXCEL - MODELE VIERGE
+# ============================================================
 
 def creer_modele_excel(date_debut=None, date_fin=None):
 
     if date_debut is None:
         date_debut = monday_of(date.today())
+
     if date_fin is None:
         date_fin = date_debut + timedelta(days=6)
 
     if date_fin < date_debut:
-        raise ValueError("La date de fin doit être postérieure à la date de début.")
+        raise ValueError("Période incorrecte.")
 
     dates = [
         date_debut + timedelta(days=i)
-        for i in range((date_fin - date_debut).days + 1)
+        for i in range((date_fin-date_debut).days+1)
     ]
 
     wb = Workbook()
@@ -320,39 +497,34 @@ def creer_modele_excel(date_debut=None, date_fin=None):
     bleu = "D9EAF7"
     gris = "E7E6E6"
 
-    bord_fin = Side(style="thin", color="333333")
+    bord = Side(style="thin", color="333333")
     bordures = Border(
-        left=bord_fin,
-        right=bord_fin,
-        top=bord_fin,
-        bottom=bord_fin
+        left=bord, right=bord,
+        top=bord, bottom=bord
     )
 
-    # 3 colonnes fixes + une colonne par date + Observations
-    derniere_colonne = 4 + len(dates)  # dernière date = 3 + len(dates)
+    derniere_colonne = 4 + len(dates)
     derniere_lettre = get_column_letter(derniere_colonne)
 
-    # Titre
     ws.merge_cells(f"A1:{derniere_lettre}1")
     ws["A1"] = "TABLEAU HEBDOMADAIRE DE SERVICE"
     ws["A1"].font = Font(
-        name="Arial",
-        size=15,
-        bold=True,
-        color="16324F"
+        name="Arial", size=15,
+        bold=True, color="16324F"
     )
     ws["A1"].alignment = Alignment(
-        horizontal="center",
-        vertical="center"
+        horizontal="center", vertical="center"
     )
     ws.row_dimensions[1].height = 30
 
-    # Informations générales
     info_cells = [
         ("A2:B2", "PÉRIODE DU :"),
         ("C2:D2", date_debut.strftime("%d/%m/%Y")),
         ("E2:F2", "AU :"),
         ("G2:H2", date_fin.strftime("%d/%m/%Y")),
+        ("I2:J2", "EXEMPLAIRE DESTINÉ À :"),
+        ("K2:L2", "TRANSMIS LE :"),
+        ("M2:N2", "VISA :")
     ]
 
     for cell_range, value in info_cells:
@@ -366,34 +538,19 @@ def creer_modele_excel(date_debut=None, date_fin=None):
             wrap_text=True
         )
 
-    # Informations facultatives complémentaires
-    ws.merge_cells("I2:J2")
-    ws["I2"] = "EXEMPLAIRE DESTINÉ À :"
-    ws["I2"].font = Font(size=8, bold=True)
-    ws["I2"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    ws.merge_cells("K2:L2")
-    ws["K2"] = "TRANSMIS LE :"
-    ws["K2"].font = Font(size=8, bold=True)
-    ws["K2"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    ws.merge_cells("M2:N2")
-    ws["M2"] = "VISA :"
-    ws["M2"].font = Font(size=8, bold=True)
-    ws["M2"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
     ws.row_dimensions[2].height = 28
 
-    # En-têtes fixes
     fixed_headers = [
         ("A", "NOMS ET PRÉNOMS", 23),
         ("B", "GRADE", 10),
-        ("C", "FONCTION", 14),
+        ("C", "FONCTION", 14)
     ]
 
-    for col_letter, title, width in fixed_headers:
-        ws.merge_cells(f"{col_letter}4:{col_letter}5")
-        cell = ws[f"{col_letter}4"]
+    for letter, title, width in fixed_headers:
+
+        ws.merge_cells(f"{letter}4:{letter}5")
+
+        cell = ws[f"{letter}4"]
         cell.value = title
         cell.font = Font(bold=True, size=9)
         cell.alignment = Alignment(
@@ -402,14 +559,20 @@ def creer_modele_excel(date_debut=None, date_fin=None):
             wrap_text=True
         )
         cell.fill = PatternFill("solid", fgColor=gris)
-        ws.column_dimensions[col_letter].width = width
 
-    # Une colonne par date : aucun numéro ni sous-colonne horaire
+        ws.column_dimensions[letter].width = width
+
     for index, current_date in enumerate(dates):
+
         col = 4 + index
+
         cell = ws.cell(row=4, column=col)
-        day_name = DAYS[current_date.weekday()]
-        cell.value = f"{day_name.upper()}\n{current_date.strftime('%d/%m/%Y')}"
+
+        cell.value = (
+            f"{DAYS[current_date.weekday()].upper()}\n"
+            f"{current_date.strftime('%d/%m/%Y')}"
+        )
+
         cell.font = Font(bold=True, size=8)
         cell.alignment = Alignment(
             horizontal="center",
@@ -417,23 +580,24 @@ def creer_modele_excel(date_debut=None, date_fin=None):
             wrap_text=True
         )
         cell.fill = PatternFill("solid", fgColor=bleu)
-        ws.merge_cells(
-            start_row=4,
-            start_column=col,
-            end_row=5,
-            end_column=col
-        )
-        ws.column_dimensions[get_column_letter(col)].width = 13
 
-    # Observations immédiatement après le dernier jour
+        ws.merge_cells(
+            start_row=4, start_column=col,
+            end_row=5, end_column=col
+        )
+
+        ws.column_dimensions[
+            get_column_letter(col)
+        ].width = 13
+
     col_obs = 4 + len(dates)
     lettre_obs = get_column_letter(col_obs)
+
     ws.merge_cells(
-        start_row=4,
-        start_column=col_obs,
-        end_row=5,
-        end_column=col_obs
+        start_row=4, start_column=col_obs,
+        end_row=5, end_column=col_obs
     )
+
     cell_obs = ws.cell(row=4, column=col_obs)
     cell_obs.value = "OBSERVATIONS"
     cell_obs.font = Font(bold=True, size=9)
@@ -443,14 +607,13 @@ def creer_modele_excel(date_debut=None, date_fin=None):
         wrap_text=True
     )
     cell_obs.fill = PatternFill("solid", fgColor=gris)
+
     ws.column_dimensions[lettre_obs].width = 28
 
-    # 9 lignes vierges
-    premiere_ligne = 6
-    derniere_ligne = 14
+    for ligne in range(6, 15):
 
-    for ligne in range(premiere_ligne, derniere_ligne + 1):
-        for col in range(1, derniere_colonne + 1):
+        for col in range(1, derniere_colonne+1):
+
             cell = ws.cell(row=ligne, column=col)
             cell.border = bordures
             cell.alignment = Alignment(
@@ -458,14 +621,13 @@ def creer_modele_excel(date_debut=None, date_fin=None):
                 vertical="center",
                 wrap_text=True
             )
+
         ws.row_dimensions[ligne].height = 38
 
-    # Bordures des en-têtes
     for ligne in range(4, 6):
-        for col in range(1, derniere_colonne + 1):
+        for col in range(1, derniere_colonne+1):
             ws.cell(row=ligne, column=col).border = bordures
 
-    # Mise en page
     ws.freeze_panes = "D6"
     ws.sheet_view.showGridLines = False
 
@@ -476,37 +638,58 @@ def creer_modele_excel(date_debut=None, date_fin=None):
     ws.sheet_properties.pageSetUpPr.fitToPage = True
 
     ws.page_margins = PageMargins(
-        left=0.2,
-        right=0.2,
-        top=0.3,
-        bottom=0.3
+        left=0.2, right=0.2,
+        top=0.3, bottom=0.3
     )
 
-    ws.print_area = f"A1:{derniere_lettre}{derniere_ligne}"
+    ws.print_area = f"A1:{derniere_lettre}14"
 
     fichier = BytesIO()
     wb.save(fichier)
     fichier.seek(0)
+
     return fichier
 
 
-# ------------------------------------------------------------
-# Export PDF : modèle vierge personnalisé
-# ------------------------------------------------------------
+# ============================================================
+# TRI DE L'EQUIPE
+# ============================================================
+
+def trier_equipe(users):
+
+    ordre = {
+        "Chef de service": 0,
+        "Contrôleur": 1,
+        "Prévisionniste": 2
+    }
+
+    return sorted(
+        [u for u in users if u["active"]],
+        key=lambda u: (
+            ordre.get(u["role"], 3),
+            u["full_name"].casefold()
+        )
+    )
+
+
+# ============================================================
+# EXPORT PDF - MODELE VIERGE
+# ============================================================
 
 def creer_modele_pdf(date_debut=None, date_fin=None):
 
     if date_debut is None:
         date_debut = monday_of(date.today())
+
     if date_fin is None:
         date_fin = date_debut + timedelta(days=6)
 
     if date_fin < date_debut:
-        raise ValueError("La date de fin doit être postérieure à la date de début.")
+        raise ValueError("Période incorrecte.")
 
     dates = [
         date_debut + timedelta(days=i)
-        for i in range((date_fin - date_debut).days + 1)
+        for i in range((date_fin-date_debut).days+1)
     ]
 
     elements = []
@@ -545,52 +728,49 @@ def creer_modele_pdf(date_debut=None, date_fin=None):
         " &nbsp;&nbsp;&nbsp; TRANSMIS LE : __________"
         " &nbsp;&nbsp;&nbsp; VISA : __________"
     )
+
     elements.append(Paragraph(infos, style_normal))
     elements.append(Spacer(1, 10))
 
-    # Colonnes : Noms, Grade, Fonction, dates, Observations
     nombre_colonnes = 4 + len(dates)
-    ligne_entetes = [""] * nombre_colonnes
+    entetes = [""] * nombre_colonnes
 
-    ligne_entetes[0] = Paragraph("NOMS ET<br/>PRÉNOMS", style_entete)
-    ligne_entetes[1] = Paragraph("GRADE", style_entete)
-    ligne_entetes[2] = Paragraph("FONCTION", style_entete)
+    entetes[0] = Paragraph("NOMS ET<br/>PRÉNOMS", style_entete)
+    entetes[1] = Paragraph("GRADE", style_entete)
+    entetes[2] = Paragraph("FONCTION", style_entete)
 
-    for index, current_date in enumerate(dates):
-        day_name = DAYS[current_date.weekday()]
-        ligne_entetes[3 + index] = Paragraph(
-            f"{day_name.upper()}<br/>{current_date.strftime('%d/%m/%Y')}",
+    for index, d in enumerate(dates):
+        entetes[3+index] = Paragraph(
+            f"{DAYS[d.weekday()].upper()}<br/>{d.strftime('%d/%m/%Y')}",
             style_entete
         )
 
-    ligne_entetes[-1] = Paragraph("OBSERVATIONS", style_entete)
+    entetes[-1] = Paragraph("OBSERVATIONS", style_entete)
 
-    donnees = [ligne_entetes]
+    donnees = [entetes]
 
-    # Exactement 9 lignes vierges
     for _ in range(9):
         donnees.append([""] * nombre_colonnes)
 
-    # Largeurs proportionnelles, adaptées à la largeur disponible en A3
-    largeur_disponible = landscape(A3)[0] - 36
+    largeur_page = landscape(A3)[0] - 36
+
     largeur_fixes = [88, 38, 52]
-    largeur_observations = 105
-    largeur_jours_totale = max(
-        120,
-        largeur_disponible - sum(largeur_fixes) - largeur_observations
-    )
-    largeur_par_jour = largeur_jours_totale / len(dates)
+    largeur_obs = 105
+
+    largeur_jour = (
+        largeur_page - sum(largeur_fixes) - largeur_obs
+    ) / len(dates)
 
     largeurs = (
         largeur_fixes
-        + [largeur_par_jour] * len(dates)
-        + [largeur_observations]
+        + [largeur_jour] * len(dates)
+        + [largeur_obs]
     )
 
     tableau = Table(
         donnees,
         colWidths=largeurs,
-        rowHeights=[38] + [38] * 9,
+        rowHeights=[38] + [38]*9,
         repeatRows=1
     )
 
@@ -599,15 +779,8 @@ def creer_modele_pdf(date_debut=None, date_fin=None):
         ("BACKGROUND", (0, 0), (2, 0), colors.lightgrey),
         ("BACKGROUND", (3, 0), (-2, 0), colors.HexColor("#D9EAF7")),
         ("BACKGROUND", (-1, 0), (-1, 0), colors.lightgrey),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 6),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 2),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-        ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-        ("BOX", (0, 0), (-1, -1), 1, colors.black),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE")
     ]))
 
     elements.append(tableau)
@@ -625,77 +798,97 @@ def creer_modele_pdf(date_debut=None, date_fin=None):
 
     document.build(elements)
     fichier.seek(0)
+
     return fichier
 
 
-# ------------------------------------------------------------
-# Export PDF : planning final rempli depuis la base de données
-# ------------------------------------------------------------
+# ============================================================
+# EXPORT PDF - PLANNING FINAL AVEC CONGES
+# ============================================================
 
-def trier_equipe(users):
-    """Place les fonctions régulières en premier, puis les prévisionnistes."""
-    ordre = {
-        "Chef de service": 0,
-        "Contrôleur": 1,
-        "Prévisionniste": 2,
-    }
-    return sorted(
-        [u for u in users if u["active"]],
-        key=lambda u: (ordre.get(u["role"], 3), u["full_name"].casefold())
-    )
-
-
-def creer_planning_final_pdf(date_debut, date_fin, users, vacations):
-    """Construit le planning réel à partir des comptes et vacations enregistrés."""
+def creer_planning_final_pdf(
+    date_debut,
+    date_fin,
+    users,
+    vacations,
+    leaves=None
+):
 
     if date_fin < date_debut:
-        raise ValueError("La date de fin doit être postérieure à la date de début.")
+        raise ValueError("Période incorrecte.")
+
+    leaves = leaves or []
 
     dates = [
         date_debut + timedelta(days=i)
-        for i in range((date_fin - date_debut).days + 1)
+        for i in range((date_fin-date_debut).days+1)
     ]
 
-    # Ne conserver que les utilisateurs actifs et appliquer l'ordre du tableau.
     equipe = trier_equipe(users)
 
     if len(equipe) > 9:
         raise ValueError(
-            f"Le tableau comporte 9 lignes disponibles, mais {len(equipe)} "
-            "comptes sont actifs. Désactivez les comptes inutilisés avant "
-            "de générer le PDF."
+            "Le tableau comporte seulement 9 lignes disponibles."
         )
 
-    # Indexer les vacations par utilisateur et par date.
     vacations_par_user = {}
+
     for vac in vacations:
-        vacations_par_user.setdefault(vac["user_id"], {})[
-            vac["vacation_date"]
-        ] = vac
+        vacations_par_user.setdefault(
+            vac["user_id"], {}
+        )[vac["vacation_date"]] = vac
+
+    leaves_par_user = {}
+
+    for leave in leaves:
+        leaves_par_user.setdefault(
+            leave["user_id"], []
+        ).append(leave)
 
     style_titre = ParagraphStyle(
-        "TitrePlanningFinal", fontName="Helvetica-Bold",
-        fontSize=16, alignment=TA_CENTER, spaceAfter=7
+        "TitreFinal",
+        fontName="Helvetica-Bold",
+        fontSize=16,
+        alignment=TA_CENTER,
+        spaceAfter=7
     )
+
     style_info = ParagraphStyle(
-        "InfoPlanningFinal", fontName="Helvetica",
-        fontSize=10, alignment=TA_LEFT, leading=9
+        "InfoFinal",
+        fontName="Helvetica",
+        fontSize=10,
+        alignment=TA_LEFT
     )
+
     style_entete = ParagraphStyle(
-        "EntetePlanningFinal", fontName="Helvetica-Bold",
-        fontSize=8, alignment=TA_CENTER, leading=7
+        "EnteteFinal",
+        fontName="Helvetica-Bold",
+        fontSize=8,
+        alignment=TA_CENTER,
+        leading=9
     )
+
     style_cellule = ParagraphStyle(
-        "CellulePlanningFinal", fontName="Helvetica-Bold",
-        fontSize=8, alignment=TA_CENTER, leading=7
+        "CelluleFinal",
+        fontName="Helvetica-Bold",
+        fontSize=7,
+        alignment=TA_CENTER,
+        leading=8
     )
+
     style_obs = ParagraphStyle(
-        "ObsPlanningFinal", fontName="Helvetica",
-        fontSize=8, alignment=TA_LEFT, leading=6.5
+        "ObsFinal",
+        fontName="Helvetica",
+        fontSize=7,
+        alignment=TA_LEFT,
+        leading=8
     )
 
     elements = [
-        Paragraph("TABLEAU DE SERVICE – PLANNING FINAL<br/>SEM – DRMCO", style_titre),
+        Paragraph(
+            "TABLEAU DE SERVICE – PLANNING FINAL<br/>SEM – DRMCO",
+            style_titre
+        ),
         Paragraph(
             f"<b>Période :</b> {date_debut.strftime('%d/%m/%Y')} "
             f"au {date_fin.strftime('%d/%m/%Y')} "
@@ -709,8 +902,9 @@ def creer_planning_final_pdf(date_debut, date_fin, users, vacations):
     entetes = [
         Paragraph("NOMS ET PRÉNOMS", style_entete),
         Paragraph("GRADE", style_entete),
-        Paragraph("FONCTION", style_entete),
+        Paragraph("FONCTION", style_entete)
     ]
+
     for d in dates:
         entetes.append(
             Paragraph(
@@ -718,88 +912,132 @@ def creer_planning_final_pdf(date_debut, date_fin, users, vacations):
                 style_entete
             )
         )
+
     entetes.append(Paragraph("OBSERVATIONS", style_entete))
 
     donnees = [entetes]
 
     for user in equipe:
+
         nom = escape(str(user["full_name"] or ""))
         role = escape(str(user["role"] or ""))
-        # Le champ grade n'existe pas dans la base actuelle.
+
         ligne = [
             Paragraph(nom, style_cellule),
             Paragraph("", style_cellule),
-            Paragraph(role, style_cellule),
+            Paragraph(role, style_cellule)
         ]
 
         observations = []
+
         user_vacations = vacations_par_user.get(user["id"], {})
+        user_leaves = leaves_par_user.get(user["id"], [])
 
         for d in dates:
+
             key = d.isoformat()
 
-            if user["role"] in REGULAR_ROLES:
-                # Les fonctions régulières sont prévues du lundi au vendredi.
+            leave_for_day = next(
+                (
+                    leave for leave in user_leaves
+                    if leave["start_date"] <= key <= leave["end_date"]
+                ),
+                None
+            )
+
+            if leave_for_day:
+
+                contenu = "CONGÉ"
+
+                # Ajouter le motif et l'observation dans la colonne dédiée
+                observation = (
+                    f"{d.strftime('%d/%m')}: "
+                    f"{leave_for_day['reason']}"
+                )
+
+                if leave_for_day["note"]:
+                    observation += f" - {leave_for_day['note']}"
+
+                if observation not in observations:
+                    observations.append(observation)
+
+            elif role in REGULAR_ROLES:
+
                 contenu = "Régulier" if d.weekday() < 5 else ""
+
             elif key in user_vacations:
+
                 contenu = "Matin"
-                note = (user_vacations[key]["note"] or "").strip()
+
+                note = (
+                    user_vacations[key]["note"] or ""
+                ).strip()
+
                 if note:
                     observations.append(
                         f"{d.strftime('%d/%m')}: {note}"
                     )
+
             else:
                 contenu = ""
 
-            ligne.append(Paragraph(contenu, style_cellule))
+            ligne.append(
+                Paragraph(contenu, style_cellule)
+            )
 
-        obs = "<br/>".join(escape(x) for x in observations) or " "
+        obs = "<br/>".join(
+            escape(x) for x in observations
+        ) or " "
+
         ligne.append(Paragraph(obs, style_obs))
+
         donnees.append(ligne)
 
-    # Le modèle final comporte exactement neuf lignes de personnel.
     while len(donnees) < 10:
         donnees.append([""] * len(entetes))
 
     largeur_page = landscape(A3)[0] - 36
-    largeur_nom, largeur_grade, largeur_fonction, largeur_obs = 105, 35, 65, 125
-    largeur_jours = (
-        largeur_page - largeur_nom - largeur_grade
-        - largeur_fonction - largeur_obs
+
+    largeur_nom = 105
+    largeur_grade = 35
+    largeur_fonction = 65
+    largeur_obs = 125
+
+    largeur_jour = (
+        largeur_page
+        - largeur_nom
+        - largeur_grade
+        - largeur_fonction
+        - largeur_obs
     ) / len(dates)
 
     largeurs = (
         [largeur_nom, largeur_grade, largeur_fonction]
-        + [largeur_jours] * len(dates)
+        + [largeur_jour] * len(dates)
         + [largeur_obs]
     )
 
-    hauteurs = [67] + [66] * (len(donnees) - 1)
     tableau = Table(
         donnees,
         colWidths=largeurs,
-        rowHeights=hauteurs,
+        rowHeights=[67] + [66]*(len(donnees)-1),
         repeatRows=1
     )
+
     tableau.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
         ("BACKGROUND", (0, 0), (2, 0), colors.lightgrey),
         ("BACKGROUND", (3, 0), (-2, 0), colors.HexColor("#D9EAF7")),
         ("BACKGROUND", (-1, 0), (-1, 0), colors.lightgrey),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("LEFTPADDING", (0, 0), (-1, -1), 2),
         ("RIGHTPADDING", (0, 0), (-1, -1), 2),
         ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2)
     ]))
-    elements.append(tableau)
-    # --------------------------------------------------------
-    # Signature du Chef de service en bas à droite
-    # --------------------------------------------------------
 
-    elements.append(Spacer(1, 3))
+    elements.append(tableau)
 
     style_signature = ParagraphStyle(
         "Signature",
@@ -810,36 +1048,26 @@ def creer_planning_final_pdf(date_debut, date_fin, users, vacations):
     )
 
     signature = Table(
-        [[Paragraph(
-            "<br/><br/><br/>Signature : ",
-            style_signature
-        )]],
+        [[Paragraph("<br/><br/><br/>Signature :", style_signature)]],
         colWidths=[180],
         rowHeights=[35]
     )
 
     signature.setStyle(TableStyle([
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 2),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-        ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ("VALIGN", (0, 0), (-1, -1), "TOP")
     ]))
 
     bloc_signature = Table(
         [["", signature]],
-        colWidths=[largeur_page - 180, 180]
+        colWidths=[largeur_page-180, 180]
     )
 
     bloc_signature.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ("VALIGN", (0, 0), (-1, -1), "TOP")
     ]))
 
+    elements.append(Spacer(1, 3))
     elements.append(bloc_signature)
 
     fichier = BytesIO()
@@ -847,45 +1075,56 @@ def creer_planning_final_pdf(date_debut, date_fin, users, vacations):
     document = SimpleDocTemplate(
         fichier,
         pagesize=landscape(A3),
-        rightMargin=18, leftMargin=18,
-        topMargin=12, bottomMargin=5
+        rightMargin=18,
+        leftMargin=18,
+        topMargin=12,
+        bottomMargin=5
     )
+
     document.build(elements)
     fichier.seek(0)
+
     return fichier
 
 
-# ------------------------------------------------------------
-# Initialisation
-# ------------------------------------------------------------
+# ============================================================
+# INITIALISATION
+# ============================================================
 
 init_db()
 
-# ------------------------------------------------------------
-# Styling
-# ------------------------------------------------------------
+
+# ============================================================
+# STYLE
+# ============================================================
 
 st.markdown("""
 <style>
-    .main-title {
-        color: #16324F;
-        font-weight: 750;
-    }
+.main-title {
+    color: #16324F;
+    font-weight: 750;
+}
 
-    div[data-testid="stMetric"] {
-        background: #F1F5F9;
-        padding: 12px;
-        border-radius: 10px;
-    }
+div[data-testid="stMetric"] {
+    background: #F1F5F9;
+    padding: 12px;
+    border-radius: 10px;
+}
+
+.leave-label {
+    color: #C0392B;
+    font-weight: bold;
+}
 </style>
 """, unsafe_allow_html=True)
 
 st.title("📅 Planning des vacations")
 st.caption("Service Exploitation Météorologique – DRMCO")
 
-# ------------------------------------------------------------
-# Login
-# ------------------------------------------------------------
+
+# ============================================================
+# LOGIN
+# ============================================================
 
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -895,6 +1134,7 @@ if st.session_state.user is None:
     st.subheader("Connexion")
 
     with st.form("login_form"):
+
         username = st.text_input("Identifiant")
         password = st.text_input("Mot de passe", type="password")
 
@@ -904,6 +1144,7 @@ if st.session_state.user is None:
         )
 
     if submitted:
+
         user = get_user(username.strip())
 
         if user and verify_password(
@@ -911,13 +1152,16 @@ if st.session_state.user is None:
             user["salt"],
             user["password_hash"]
         ):
+
             st.session_state.user = {
                 "id": user["id"],
                 "username": user["username"],
                 "full_name": user["full_name"],
-                "role": user["role"],
+                "role": user["role"]
             }
+
             st.rerun()
+
         else:
             st.error("Identifiant ou mot de passe incorrect.")
 
@@ -925,14 +1169,16 @@ if st.session_state.user is None:
 
 
 current = st.session_state.user
+
 is_admin = current["role"] == "Chef de service"
 
 
-# ------------------------------------------------------------
-# Sidebar
-# ------------------------------------------------------------
+# ============================================================
+# SIDEBAR
+# ============================================================
 
 with st.sidebar:
+
     st.write(f"**{current['full_name']}**")
     st.caption(current["role"])
 
@@ -953,12 +1199,14 @@ with st.sidebar:
 
 
 start, end = five_week_period()
+
 all_vacations = get_vacations(start, end)
+all_leaves = get_leaves(start, end)
 
 
-# ------------------------------------------------------------
-# Page : planning overview
-# ------------------------------------------------------------
+# ============================================================
+# PAGE 1 : PLANNING GENERAL
+# ============================================================
 
 if page == "Planning des 5 semaines":
 
@@ -981,64 +1229,90 @@ if page == "Planning des 5 semaines":
         if u["role"] == "Prévisionniste" and u["active"]
     ]
 
-    m1, m2, m3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
 
-    m1.metric("Prévisionnistes en rotation", len(rotation))
-    m2.metric("Vacations saisies", len(all_vacations))
-    m3.metric("Places prévues", 70)
+    c1.metric("Prévisionnistes", len(rotation))
+    c2.metric("Vacations saisies", len(all_vacations))
+    c3.metric("Places prévues", 70)
+    c4.metric("Déclarations de congé", len(all_leaves))
 
     for week in range(5):
-        week_start = start + timedelta(days=7 * week)
+
+        week_start = start + timedelta(days=7*week)
 
         st.markdown(
-            f"### Semaine {week + 1} · "
+            f"### Semaine {week+1} · "
             f"{week_start.strftime('%d/%m')} – "
-            f"{(week_start + timedelta(days=6)).strftime('%d/%m/%Y')}"
+            f"{(week_start+timedelta(days=6)).strftime('%d/%m/%Y')}"
         )
 
         rows = []
 
         for offset, day_name in enumerate(DAYS):
+
             current_day = week_start + timedelta(days=offset)
+
+            day_key = current_day.isoformat()
 
             day_vacs = [
                 v for v in all_vacations
-                if v["vacation_date"] == current_day.isoformat()
+                if v["vacation_date"] == day_key
+            ]
+
+            day_leaves = [
+                leave for leave in all_leaves
+                if leave["start_date"] <= day_key <= leave["end_date"]
             ]
 
             names = [v["full_name"] for v in day_vacs]
 
+            leaves_names = [
+                leave["full_name"]
+                for leave in day_leaves
+            ]
+
+            chef = next(
+                (
+                    u["full_name"] for u in regulars
+                    if u["role"] == "Chef de service"
+                ),
+                "—"
+            )
+
+            controleur = next(
+                (
+                    u["full_name"] for u in regulars
+                    if u["role"] == "Contrôleur"
+                ),
+                "—"
+            )
+
+            # Afficher les congés des agents concernés
+            if chef != "—" and chef in leaves_names:
+                chef_display = f"{chef} (CONGÉ)"
+            else:
+                chef_display = chef if offset < 5 else "—"
+
+            if controleur != "—" and controleur in leaves_names:
+                controleur_display = f"{controleur} (CONGÉ)"
+            else:
+                controleur_display = controleur if offset < 5 else "—"
+
             rows.append({
                 "Jour": (
-                    f"{day_name} "
-                    f"{current_day.strftime('%d/%m')}"
+                    f"{day_name} {current_day.strftime('%d/%m')}"
                 ),
-                "Chef du service": (
-                    next(
-                        (
-                            u["full_name"]
-                            for u in regulars
-                            if u["role"] == "Chef de service"
-                        ),
-                        "—"
-                    ) if offset < 5 else "—"
-                ),
-                "Contrôleur": (
-                    next(
-                        (
-                            u["full_name"]
-                            for u in regulars
-                            if u["role"] == "Contrôleur"
-                        ),
-                        "—"
-                    ) if offset < 5 else "—"
-                ),
+                "Chef de service": chef_display,
+                "Contrôleur": controleur_display,
                 "Vacation matin 1": (
                     names[0] if len(names) > 0 else "Libre"
                 ),
                 "Vacation matin 2": (
                     names[1] if len(names) > 1 else "Libre"
                 ),
+                "Agents en congé": (
+                    ", ".join(leaves_names) if leaves_names else "—"
+                )
             })
 
         st.dataframe(
@@ -1048,67 +1322,73 @@ if page == "Planning des 5 semaines":
         )
 
     # --------------------------------------------------------
-    # Export du planning final avec les vacations enregistrées
+    # EXPORT PDF FINAL
     # --------------------------------------------------------
 
     st.divider()
+
     st.subheader("📄 Télécharger le planning final")
 
     st.caption(
-        "Choisissez la période souhaitée. Le PDF reprendra les vacations "
-        "effectivement enregistrées dans l'application."
+        "Le PDF reprend les vacations et les congés enregistrés."
     )
 
-    col_date1, col_date2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
-    with col_date1:
+    with col1:
         date_export_debut = st.date_input(
             "Date de début",
             value=start,
             key="date_export_debut"
         )
 
-    with col_date2:
+    with col2:
         date_export_fin = st.date_input(
             "Date de fin",
-            value=start + timedelta(days=6),
-            min_value=date_export_debut,
+            value=start+timedelta(days=6),
             key="date_export_fin"
         )
 
     if date_export_fin < date_export_debut:
-        st.error("La date de fin doit être égale ou postérieure à la date de début.")
+
+        st.error("La date de fin doit être après la date de début.")
+
     else:
+
         vacations_periode = get_vacations(
             date_export_debut,
             date_export_fin
         )
+
+        leaves_periode = get_leaves(
+            date_export_debut,
+            date_export_fin
+        )
+
         equipe_active = [
             u for u in list_users()
             if u["active"]
         ]
 
         if len(equipe_active) > 9:
+
             st.error(
-                f"Impossible de générer le PDF : le modèle comporte 9 lignes, "
-                f"mais {len(equipe_active)} comptes sont actifs. "
-                "Désactivez les comptes inutilisés dans Administration."
+                "Le modèle PDF comporte seulement 9 lignes. "
+                "Désactivez les comptes inutilisés."
             )
+
         else:
-            if not vacations_periode:
-                st.info(
-                    "Aucune vacation n'est enregistrée pour cette période. "
-                    "Le PDF sera tout de même généré avec les fonctions "
-                    "régulières et les cases de vacations laissées vides."
-                )
 
             try:
+
                 pdf_final = creer_planning_final_pdf(
                     date_export_debut,
                     date_export_fin,
                     equipe_active,
-                    vacations_periode
+                    vacations_periode,
+                    leaves_periode
                 )
+
                 st.download_button(
                     label="📥 Télécharger le planning final en PDF",
                     data=pdf_final,
@@ -1120,54 +1400,56 @@ if page == "Planning des 5 semaines":
                     mime="application/pdf",
                     use_container_width=True
                 )
+
             except ValueError as e:
                 st.error(str(e))
 
 
-# ------------------------------------------------------------
-# Page : enter/edit own vacations
-# ------------------------------------------------------------
+# ============================================================
+# PAGE 2 : VACATIONS ET CONGES PERSONNELS
+# ============================================================
 
 elif page == "Saisir mes vacations":
 
     st.subheader("Saisir ou modifier mes vacations")
 
     if current["role"] in REGULAR_ROLES:
+
         st.info(
             "Votre fonction est enregistrée comme régulière "
             "du lundi au vendredi. Les vacations tournantes "
-            "du matin sont réservées aux cinq prévisionnistes."
+            "du matin sont réservées aux prévisionnistes."
         )
 
     else:
+
         chosen_week = st.selectbox(
             "Semaine",
             options=list(range(5)),
             format_func=lambda x: (
                 f"Semaine {x+1} – "
-                f"{(start + timedelta(days=7*x)).strftime('%d/%m/%Y')}"
-            ),
+                f"{(start+timedelta(days=7*x)).strftime('%d/%m/%Y')}"
+            )
         )
 
-        week_start = start + timedelta(days=7 * chosen_week)
+        week_start = start + timedelta(days=7*chosen_week)
+
         week_days = [
-            week_start + timedelta(days=i)
+            week_start+timedelta(days=i)
             for i in range(7)
         ]
 
         with db() as conn:
-            my_rows = conn.execute(
-                """
+
+            my_rows = conn.execute("""
                 SELECT * FROM vacations
                 WHERE user_id=?
                 AND vacation_date BETWEEN ? AND ?
-                """,
-                (
-                    current["id"],
-                    week_days[0].isoformat(),
-                    week_days[-1].isoformat()
-                ),
-            ).fetchall()
+            """, (
+                current["id"],
+                week_days[0].isoformat(),
+                week_days[-1].isoformat()
+            )).fetchall()
 
         my_dates = {
             r["vacation_date"]: r
@@ -1175,11 +1457,12 @@ elif page == "Saisir mes vacations":
         }
 
         st.write(
-            "Coche les jours où tu souhaites assurer "
+            "Cochez les jours où vous souhaitez assurer "
             "une vacation du matin."
         )
 
         for d in week_days:
+
             existing = my_dates.get(d.isoformat())
 
             col1, col2, col3 = st.columns([2, 2, 3])
@@ -1189,47 +1472,56 @@ elif page == "Saisir mes vacations":
             )
 
             if existing:
-                col2.success("Déjà inscrite")
-                note_default = existing["note"] or ""
+
+                col2.success("Déjà inscrit(e)")
 
                 if col3.button(
                     "Retirer",
                     key=f"del_{d.isoformat()}"
                 ):
-                    delete_vacation(existing["id"], current["id"])
+
+                    delete_vacation(
+                        existing["id"],
+                        current["id"]
+                    )
+
                     st.rerun()
+
             else:
-                note_default = ""
 
                 if col2.button(
                     "Choisir cette vacation",
                     key=f"add_{d.isoformat()}"
                 ):
+
                     ok, message = save_vacation(
                         current["id"],
                         d,
                         ""
                     )
-                    (st.success if ok else st.warning)(message)
+
+                    if ok:
+                        st.success(message)
+                    else:
+                        st.warning(message)
+
                     st.rerun()
 
-            if existing and note_default:
-                col3.caption(f"Note : {note_default}")
-
         with st.expander("Ajouter ou modifier une observation"):
+
             dates_with_vacation = [
                 d for d in week_days
                 if d.isoformat() in my_dates
             ]
 
             if dates_with_vacation:
+
                 selected = st.selectbox(
                     "Vacation concernée",
                     dates_with_vacation,
                     format_func=lambda d: (
-                        f"{DAYS[d.weekday()]} "
-                        f"{d.strftime('%d/%m/%Y')}"
-                    ),
+                        f"{DAYS[d.weekday()]} {d.strftime('%d/%m/%Y')}"
+                    )
                 )
 
                 note = st.text_area(
@@ -1238,53 +1530,249 @@ elif page == "Saisir mes vacations":
                 )
 
                 if st.button("Enregistrer l'observation"):
+
                     save_vacation(
                         current["id"],
                         selected,
                         note
                     )
+
                     st.success("Observation enregistrée.")
                     st.rerun()
+
             else:
+
                 st.caption(
                     "Aucune vacation saisie pour cette semaine."
                 )
 
+    # ========================================================
+    # DECLARATION DES CONGES
+    # ========================================================
 
-# ------------------------------------------------------------
-# Page : account
-# ------------------------------------------------------------
+    st.divider()
+
+    st.subheader("🏖️ Déclarer mes congés")
+
+    st.info(
+        "Chaque agent peut déclarer ses congés directement "
+        "depuis son compte."
+    )
+
+    with st.form("leave_form"):
+
+        leave_start = st.date_input(
+            "Date de début",
+            value=date.today(),
+            key="leave_start"
+        )
+
+        leave_end = st.date_input(
+            "Date de fin",
+            value=leave_start,
+            key="leave_end"
+        )
+
+        leave_reason = st.selectbox(
+            "Motif du congé",
+            LEAVE_REASONS
+        )
+
+        leave_note = st.text_area(
+            "Observation complémentaire",
+            placeholder="Précisions éventuelles..."
+        )
+
+        submitted_leave = st.form_submit_button(
+            "Enregistrer mes congés",
+            use_container_width=True
+        )
+
+        if submitted_leave:
+
+            if leave_end < leave_start:
+
+                st.error("La période sélectionnée est incorrecte.")
+
+            else:
+
+                ok, message = save_leave(
+                    current["id"],
+                    leave_start,
+                    leave_end,
+                    leave_reason,
+                    leave_note
+                )
+
+                if ok:
+                    st.success(message)
+                    st.rerun()
+                else:
+                    st.error(message)
+
+    # ========================================================
+    # LISTE ET MODIFICATION DES CONGES PERSONNELS
+    # ========================================================
+
+    st.divider()
+
+    st.subheader("Mes congés enregistrés")
+
+    my_leaves = get_my_leaves(current["id"])
+
+    if my_leaves:
+
+        for leave in my_leaves:
+
+            with st.expander(
+                f"{leave['reason']} : "
+                f"{leave['start_date']} au {leave['end_date']}"
+            ):
+
+                st.write(
+                    f"**Observation :** {leave['note'] or 'Aucune'}"
+                )
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+
+                    if st.button(
+                        "Modifier",
+                        key=f"edit_leave_{leave['id']}"
+                    ):
+
+                        st.session_state.edit_leave_id = leave["id"]
+                        st.rerun()
+
+                with col2:
+
+                    if st.button(
+                        "Supprimer",
+                        key=f"delete_leave_{leave['id']}"
+                    ):
+
+                        delete_leave(
+                            leave["id"],
+                            current["id"]
+                        )
+
+                        st.session_state.pop("edit_leave_id", None)
+                        st.success("Déclaration supprimée.")
+                        st.rerun()
+
+                if st.session_state.get("edit_leave_id") == leave["id"]:
+
+                    with st.form(f"edit_leave_form_{leave['id']}"):
+
+                        new_start = st.date_input(
+                            "Nouvelle date de début",
+                            value=date.fromisoformat(leave["start_date"])
+                        )
+
+                        new_end = st.date_input(
+                            "Nouvelle date de fin",
+                            value=date.fromisoformat(leave["end_date"])
+                        )
+
+                        new_reason = st.selectbox(
+                            "Motif",
+                            LEAVE_REASONS,
+                            index=(
+                                LEAVE_REASONS.index(leave["reason"])
+                                if leave["reason"] in LEAVE_REASONS
+                                else 0
+                            )
+                        )
+
+                        new_note = st.text_area(
+                            "Observation",
+                            value=leave["note"] or ""
+                        )
+
+                        save_edit = st.form_submit_button(
+                            "Enregistrer les modifications"
+                        )
+
+                        if save_edit:
+
+                            ok, message = update_leave(
+                                leave["id"],
+                                current["id"],
+                                new_start,
+                                new_end,
+                                new_reason,
+                                new_note
+                            )
+
+                            if ok:
+
+                                st.session_state.pop(
+                                    "edit_leave_id",
+                                    None
+                                )
+
+                                st.success(message)
+                                st.rerun()
+
+                            else:
+                                st.error(message)
+
+    else:
+
+        st.info("Vous n'avez déclaré aucun congé.")
+
+
+# ============================================================
+# PAGE 3 : MON COMPTE
+# ============================================================
 
 elif page == "Mon compte":
 
     st.subheader("Mon compte")
+
     st.write(f"Nom : **{current['full_name']}**")
     st.write(f"Fonction : **{current['role']}**")
 
     with st.form("password_form"):
+
         new_password = st.text_input(
             "Nouveau mot de passe",
             type="password"
         )
+
         confirm = st.text_input(
             "Confirmer le nouveau mot de passe",
             type="password"
         )
+
         change = st.form_submit_button("Modifier le mot de passe")
 
     if change:
+
         if len(new_password) < 10:
+
             st.error(
-                "Le mot de passe doit contenir "
-                "au moins 10 caractères."
+                "Le mot de passe doit contenir au moins 10 caractères."
             )
+
         elif new_password != confirm:
-            st.error(
-                "Les deux mots de passe ne correspondent pas."
-            )
+
+            st.error("Les deux mots de passe ne correspondent pas.")
+
         else:
-            change_password(current["id"], new_password)
+
+            change_password(
+                current["id"],
+                new_password
+            )
+
             st.success("Mot de passe modifié.")
+
+
+# ============================================================
+# PAGE 4 : ADMINISTRATION
+# ============================================================
 
 elif page == "Administration" and is_admin:
 
@@ -1292,52 +1780,56 @@ elif page == "Administration" and is_admin:
 
     users = list_users()
 
-    # =====================================================
-    # MODIFICATION DU ROLE D'UN COMPTE EXISTANT
-    # =====================================================
+    # ========================================================
+    # MODIFICATION DES ROLES
+    # ========================================================
 
     st.subheader("Gestion des rôles")
 
-    if users:
-        users_dict = {
-            f"{u['full_name']} ({u['username']}) — {u['role']}":
-            u["id"]
-            for u in users
-            if u["active"]
-        }
+    users_dict = {
+        f"{u['full_name']} ({u['username']}) — {u['role']}": u["id"]
+        for u in users
+        if u["active"]
+    }
 
-        if users_dict:
-            selected_user = st.selectbox(
-                "Sélectionner un utilisateur",
-                list(users_dict.keys()),
-                key="admin_selected_user"
+    if users_dict:
+
+        selected_user = st.selectbox(
+            "Sélectionner un utilisateur",
+            list(users_dict.keys()),
+            key="admin_selected_user"
+        )
+
+        selected_user_id = users_dict[selected_user]
+
+        new_role = st.selectbox(
+            "Attribuer un rôle",
+            ["Prévisionniste", "Contrôleur"],
+            key="admin_new_role"
+        )
+
+        if st.button(
+            "Enregistrer le rôle",
+            key="save_user_role"
+        ):
+
+            update_user_role(
+                selected_user_id,
+                new_role
             )
 
-            selected_user_id = users_dict[selected_user]
+            st.success("Rôle modifié.")
+            st.rerun()
 
-            new_role = st.selectbox(
-                "Attribuer un rôle",
-                ["Prévisionniste", "Contrôleur"],
-                key="admin_new_role"
-            )
+    else:
 
-            if st.button("Enregistrer le rôle", key="save_user_role"):
-                update_user_role(selected_user_id, new_role)
+        st.info("Aucun compte actif disponible.")
 
-                st.success(
-                    f"Le rôle de {selected_user.split(' (')[0]} "
-                    f"a été modifié en : {new_role}."
-                )
-
-                st.rerun()
-        else:
-            st.info("Aucun compte actif disponible.")
+    # ========================================================
+    # CREATION DES COMPTES
+    # ========================================================
 
     st.divider()
-
-    # =====================================================
-    # CREATION D'UN NOUVEAU COMPTE
-    # =====================================================
 
     st.subheader("Créer un compte")
 
@@ -1359,26 +1851,50 @@ elif page == "Administration" and is_admin:
         submitted = st.form_submit_button("Créer le compte")
 
         if submitted:
-            if not username.strip() or not full_name.strip() or not password:
+
+            if (
+                not username.strip()
+                or not full_name.strip()
+                or not password
+            ):
+
                 st.error("Veuillez remplir tous les champs.")
+
             elif len(password) < 10:
-                st.error("Le mot de passe doit contenir au moins 10 caractères.")
+
+                st.error(
+                    "Le mot de passe doit contenir au moins 10 caractères."
+                )
+
             else:
+
                 try:
-                    create_user(username, full_name, role, password)
+
+                    create_user(
+                        username,
+                        full_name,
+                        role,
+                        password
+                    )
+
                     st.success("Compte créé avec succès.")
                     st.rerun()
 
                 except sqlite3.IntegrityError:
-                    st.error("Cet identifiant existe déjà. Choisissez-en un autre.")
+
+                    st.error(
+                        "Cet identifiant existe déjà."
+                    )
+
                 except Exception as e:
-                    st.error(f"Erreur lors de la création : {e}")
+
+                    st.error(f"Erreur : {e}")
+
+    # ========================================================
+    # COMPTES EXISTANTS
+    # ========================================================
 
     st.divider()
-
-    # =====================================================
-    # LISTE DES COMPTES
-    # =====================================================
 
     st.subheader("Comptes existants")
 
@@ -1389,42 +1905,107 @@ elif page == "Administration" and is_admin:
         col1, col2, col3, col4 = st.columns([3, 2, 1, 1])
 
         with col1:
+
             st.write(f"**{u['full_name']}**")
             st.caption(u["username"])
 
         with col2:
+
             st.write(u["role"])
 
         with col3:
+
             if u["active"]:
                 st.success("Actif")
             else:
                 st.error("Inactif")
 
         with col4:
+
             if u["active"]:
+
                 if u["id"] == current["id"]:
+
                     st.caption("Compte connecté")
-                elif st.button("Désactiver", key=f"disable_{u['id']}"):
+
+                elif st.button(
+                    "Désactiver",
+                    key=f"disable_{u['id']}"
+                ):
+
                     set_user_active(u["id"], False)
                     st.rerun()
+
             else:
-                if st.button("Activer", key=f"enable_{u['id']}"):
+
+                if st.button(
+                    "Activer",
+                    key=f"enable_{u['id']}"
+                ):
+
                     set_user_active(u["id"], True)
                     st.rerun()
 
         st.divider()
-        
-        
-# ------------------------------------------------------------
-# Footer
-# ------------------------------------------------------------
+
+    # ========================================================
+    # SUIVI DES CONGES DE L'EQUIPE
+    # ========================================================
+
+    st.subheader("🏖️ Suivi des congés de l'équipe")
+
+    admin_leaves = get_leaves(
+        date(2000, 1, 1),
+        date(2100, 12, 31)
+    )
+
+    if admin_leaves:
+
+        for leave in admin_leaves:
+
+            with st.expander(
+                f"{leave['full_name']} – {leave['reason']} "
+                f"({leave['start_date']} au {leave['end_date']})"
+            ):
+
+                st.write(f"**Fonction :** {leave['role']}")
+
+                st.write(
+                    f"**Du :** {leave['start_date']}"
+                )
+
+                st.write(
+                    f"**Au :** {leave['end_date']}"
+                )
+
+                st.write(
+                    f"**Motif :** {leave['reason']}"
+                )
+
+                st.write(
+                    f"**Observation :** {leave['note'] or 'Aucune'}"
+                )
+
+                if st.button(
+                    "Supprimer cette déclaration",
+                    key=f"admin_delete_leave_{leave['id']}"
+                ):
+
+                    delete_leave(leave["id"])
+                    st.success("Déclaration supprimée.")
+                    st.rerun()
+
+    else:
+
+        st.info("Aucun congé enregistré.")
+
+
+# ============================================================
+# FOOTER
+# ============================================================
 
 st.divider()
+
 st.caption(
     "Planning des vacations SEM / DRMCO."
 )
-
-
-
-
